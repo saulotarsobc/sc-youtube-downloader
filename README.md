@@ -17,13 +17,14 @@ Um downloader de YouTube bonito e interativo para o terminal, desenvolvido com T
 ### Instalação Global (NPX)
 
 ```bash
-npm install -g sc-youtube-downloader
+npm install -g sc-youtube-downloader;
+sc-youtube-downloader;
 ```
 
 ### Uso com NPX (sem instalação)
 
 ```bash
-npx sc-youtube-downloader
+npx sc-youtube-downloader;
 ```
 
 ## 💻 Como Usar
@@ -47,13 +48,13 @@ npx sc-youtube-downloader
 Passe a URL como argumento:
 
 ```bash
-sc-youtube-downloader "https://www.youtube.com/watch?v=VIDEO_ID"
+sc-youtube-downloader "https://youtu.be/dQw4w9WgXcQ"
 ```
 
 ou
 
 ```bash
-npx sc-youtube-downloader "https://www.youtube.com/watch?v=VIDEO_ID"
+npx sc-youtube-downloader "https://youtu.be/dQw4w9WgXcQ"
 ```
 
 ## 📋 Funcionalidades
@@ -94,8 +95,8 @@ Escolha entre:
 
 ```bash
 # Clonar o repositório
-git clone <repo-url>
-cd youtube-downloader
+git clone https://github.com/saulotarsobc/sc-youtube-downloader.git
+cd sc-youtube-downloader
 
 # Instalar dependências
 npm install
@@ -113,7 +114,7 @@ npm start
 ### Estrutura do Projeto
 
 ```
-📦 youtube-downloader
+📦 sc-youtube-downloader
 ├── 📁 src/
 │   └── 📄 index.ts          # Código principal
 ├── 📁 dist/                 # Arquivos compilados

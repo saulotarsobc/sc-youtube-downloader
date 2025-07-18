@@ -7,7 +7,7 @@
 npm run dev
 
 # Ou com URL como parâmetro
-npm run dev "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+npm run dev "https://youtu.be/dQw4w9WgXcQ"
 ```
 
 ## 2. Teste da Versão Compilada
