@@ -133,13 +133,23 @@ class YouTubeDownloader {
     console.log(videoInfoBox);
   }
 
+  private debugMode = false;
+
+  private debugLog(...args: any[]): void {
+    if (this.debugMode) {
+      console.log(chalk.gray("[DEBUG]"), ...args);
+    }
+  }
+
   private getAvailableFormats(
     formats: VideoFormat[]
   ): Array<{ name: string; value: VideoFormat }> {
-    const videoFormats = formats
+    this.debugLog(`\n🔍 Analisando ${formats.length} formatos...`);
+
+    // Separar e ordenar formatos
+    const combinedFormats = formats
       .filter((f) => f.hasVideo && f.hasAudio)
       .sort((a, b) => {
-        // Ordenar por qualidade
         const qualityOrder: { [key: string]: number } = {
           hd2160: 6,
           "2160p": 6,
@@ -156,57 +166,100 @@ class YouTubeDownloader {
           small: 0,
           "240p": 0,
         };
-
         const aQuality = qualityOrder[a.qualityLabel || a.quality] || 0;
         const bQuality = qualityOrder[b.qualityLabel || b.quality] || 0;
+        return bQuality - aQuality;
+      });
 
+    const videoOnlyFormats = formats
+      .filter((f) => f.hasVideo && !f.hasAudio && f.qualityLabel)
+      .sort((a, b) => {
+        const qualityOrder: { [key: string]: number } = {
+          "2160p": 7,
+          "1440p": 6,
+          "1080p": 5,
+          "720p": 4,
+          "480p": 3,
+          "360p": 2,
+          "240p": 1,
+          "144p": 0,
+        };
+        const aQuality = qualityOrder[a.qualityLabel || ""] || 0;
+        const bQuality = qualityOrder[b.qualityLabel || ""] || 0;
         return bQuality - aQuality;
       });
 
     const audioFormats = formats
       .filter((f) => f.hasAudio && !f.hasVideo)
-      .slice(0, 3); // Pegar apenas os primeiros 3 formatos de áudio
+      .slice(0, 2);
+
+    // Remover duplicatas
+    const uniqueCombined = Array.from(
+      new Map(
+        combinedFormats.map((format) => [
+          `${format.qualityLabel || format.quality}-${format.container}`,
+          format,
+        ])
+      ).values()
+    );
+
+    const uniqueVideoOnly = Array.from(
+      new Map(
+        videoOnlyFormats.map((format) => [
+          `${format.qualityLabel}-${format.container}`,
+          format,
+        ])
+      ).values()
+    ).slice(0, 4); // Máximo 4 opções de vídeo-only
+
+    const uniqueAudio = Array.from(
+      new Map(
+        audioFormats.map((format) => [
+          `${format.quality}-${format.container}`,
+          format,
+        ])
+      ).values()
+    );
+
+    this.debugLog(
+      `📊 Combinados: ${uniqueCombined.length}, Vídeo-only: ${uniqueVideoOnly.length}, Áudio: ${uniqueAudio.length}`
+    );
 
     const choices: Array<{ name: string; value: VideoFormat }> = [];
 
-    // Adicionar formatos de vídeo
-    videoFormats.forEach((format) => {
+    // Formatos combinados (com áudio) - PRIORIDADE
+    uniqueCombined.forEach((format) => {
       const quality = format.qualityLabel || format.quality;
       const size = this.formatFileSize(format.filesize);
-      const icon = quality.includes("1080")
-        ? "🎬"
-        : quality.includes("720")
-        ? "📺"
-        : quality.includes("480")
-        ? "�"
-        : "💾";
-
       choices.push({
-        name: `${icon} ${chalk.bold(quality)} (${format.container}) - ${size}`,
+        name: `${quality} (${format.container}) - ${size}`,
         value: format,
       });
     });
 
-    // Adicionar separador
-    if (audioFormats.length > 0) {
+    // Formatos de alta qualidade (sem áudio)
+    uniqueVideoOnly.forEach((format) => {
+      const quality = format.qualityLabel || format.quality;
+      const size = this.formatFileSize(format.filesize);
       choices.push({
-        name: chalk.gray("─".repeat(50)),
-        value: {} as VideoFormat,
+        name: `${quality} (${format.container}) - ${size} ${chalk.gray(
+          "(sem áudio)"
+        )}`,
+        value: format,
       });
+    });
 
-      // Adicionar formatos de áudio
-      audioFormats.forEach((format) => {
-        const size = this.formatFileSize(format.filesize);
-        choices.push({
-          name: `🎵 ${chalk.cyan("Apenas Áudio")} (${
-            format.container
-          }) - ${size}`,
-          value: format,
-        });
+    // Formatos de áudio
+    uniqueAudio.forEach((format) => {
+      const size = this.formatFileSize(format.filesize);
+      choices.push({
+        name: `Áudio (${format.container}) - ${size}`,
+        value: format,
       });
-    }
+    });
 
-    return choices.filter((choice) => choice.value.itag); // Remover separadores
+    this.debugLog(`✅ ${choices.length} opções disponíveis`);
+    return choices;
   }
 
   public async selectFormat(formats: VideoFormat[]): Promise<VideoFormat> {
@@ -220,12 +273,12 @@ class YouTubeDownloader {
       {
         type: "list",
         name: "selectedFormat",
-        message: chalk.yellow("🎯 Escolha a qualidade/formato para download:"),
+        message: chalk.yellow("🎯 Escolha a qualidade:"),
         choices: choices.map((choice) => ({
           name: choice.name,
           value: choice.value,
         })),
-        pageSize: 10,
+        pageSize: 15,
       },
     ]);
 
@@ -470,13 +523,21 @@ class YouTubeDownloader {
 if (require.main === module) {
   const args = process.argv.slice(2);
 
-  if (args.length === 0) {
+  // Verificar modo debug
+  const debugMode = args.includes("--debug");
+  const filteredArgs = args.filter((arg) => arg !== "--debug");
+
+  if (filteredArgs.length === 0) {
     // Modo interativo
     const downloader = new YouTubeDownloader();
+    downloader["debugMode"] = debugMode;
+    if (debugMode) {
+      console.log(chalk.magenta("🐛 Modo DEBUG ativado\n"));
+    }
     downloader.run();
   } else {
     // Modo com URL como argumento
-    const url = args[0];
+    const url = filteredArgs[0];
 
     if (!ytdl.validateURL(url)) {
       console.error(chalk.red("❌ URL inválida do YouTube"));
@@ -484,6 +545,11 @@ if (require.main === module) {
     }
 
     const downloader = new YouTubeDownloader();
+    downloader["debugMode"] = debugMode;
+
+    if (debugMode) {
+      console.log(chalk.magenta("🐛 Modo DEBUG ativado\n"));
+    }
 
     // Executar com URL pré-definida
     (async () => {
