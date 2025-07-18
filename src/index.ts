@@ -3,7 +3,9 @@
 import ytdl from "@distube/ytdl-core";
 import boxen from "boxen";
 import chalk from "chalk";
+import ffmpegStatic from "ffmpeg-static";
 import figlet from "figlet";
+import ffmpeg from "fluent-ffmpeg";
 import * as fs from "fs";
 import { createWriteStream } from "fs";
 import inquirer from "inquirer";
@@ -31,6 +33,14 @@ interface VideoInfo {
 }
 
 class YouTubeDownloader {
+  private debugMode = false;
+
+  constructor() {
+    // Configurar FFmpeg
+    if (ffmpegStatic) {
+      ffmpeg.setFfmpegPath(ffmpegStatic);
+    }
+  }
   public async showWelcome(): Promise<void> {
     console.clear();
 
@@ -132,8 +142,6 @@ class YouTubeDownloader {
 
     console.log(videoInfoBox);
   }
-
-  private debugMode = false;
 
   private debugLog(...args: any[]): void {
     if (this.debugMode) {
@@ -237,13 +245,13 @@ class YouTubeDownloader {
       });
     });
 
-    // Formatos de alta qualidade (sem áudio)
+    // Formatos de alta qualidade (sem áudio) - COMBINAÇÃO AUTOMÁTICA
     uniqueVideoOnly.forEach((format) => {
       const quality = format.qualityLabel || format.quality;
       const size = this.formatFileSize(format.filesize);
       choices.push({
-        name: `${quality} (${format.container}) - ${size} ${chalk.gray(
-          "(sem áudio)"
+        name: `${quality} (${format.container}) - ${size} ${chalk.cyan(
+          "(será combinado com áudio)"
         )}`,
         value: format,
       });
@@ -335,6 +343,12 @@ class YouTubeDownloader {
     info: VideoInfo,
     downloadPath: string
   ): Promise<void> {
+    // Se é um formato sem áudio, fazer combinação com FFmpeg
+    if (format.hasVideo && !format.hasAudio) {
+      return this.downloadAndMerge(url, format, info, downloadPath);
+    }
+
+    // Download normal para formatos que já têm áudio
     const filename = this.sanitizeFilename(`${info.title}.${format.container}`);
     const filepath = path.join(downloadPath, filename);
 
@@ -413,6 +427,203 @@ class YouTubeDownloader {
       });
 
       video.pipe(writeStream);
+    });
+  }
+
+  private async downloadAndMerge(
+    url: string,
+    videoFormat: VideoFormat,
+    info: VideoInfo,
+    downloadPath: string
+  ): Promise<void> {
+    // Encontrar o melhor áudio disponível
+    const videoInfo = await ytdl.getInfo(url);
+    const audioFormat = videoInfo.formats
+      .filter((f: any) => f.hasAudio && !f.hasVideo)
+      .sort(
+        (a: any, b: any) => (b.audioBitrate || 0) - (a.audioBitrate || 0)
+      )[0];
+
+    if (!audioFormat) {
+      throw new Error("Nenhum formato de áudio encontrado");
+    }
+
+    const baseFilename = this.sanitizeFilename(info.title);
+    const finalFilename = `${baseFilename}.mp4`;
+    const finalFilepath = path.join(downloadPath, finalFilename);
+
+    // Caminhos temporários
+    const tempVideoPath = path.join(
+      downloadPath,
+      `temp_video_${Date.now()}.${videoFormat.container}`
+    );
+    const tempAudioPath = path.join(
+      downloadPath,
+      `temp_audio_${Date.now()}.${audioFormat.container}`
+    );
+
+    console.log(
+      boxen(
+        chalk.white(`🎬 ${chalk.bold("Download em Alta Qualidade")}\n`) +
+          chalk.cyan(`📁 Pasta: ${downloadPath}\n`) +
+          chalk.green(`📄 Arquivo: ${finalFilename}\n`) +
+          chalk.yellow(`🎯 Vídeo: ${videoFormat.qualityLabel}\n`) +
+          chalk.magenta(
+            `🎵 Áudio: ${audioFormat.audioBitrate || "Melhor"} kbps`
+          ),
+        {
+          title: chalk.blue.bold("⬇️ DOWNLOAD + COMBINAÇÃO"),
+          titleAlignment: "center",
+          padding: 1,
+          margin: 1,
+          borderStyle: "round",
+          borderColor: "green",
+        }
+      )
+    );
+
+    try {
+      // Etapa 1: Download do vídeo
+      await this.downloadFile(
+        url,
+        videoFormat.itag,
+        tempVideoPath,
+        "🎬 Baixando vídeo"
+      );
+
+      // Etapa 2: Download do áudio
+      await this.downloadFile(
+        url,
+        audioFormat.itag,
+        tempAudioPath,
+        "🎵 Baixando áudio"
+      );
+
+      // Etapa 3: Combinar usando FFmpeg
+      await this.mergeVideoAudio(tempVideoPath, tempAudioPath, finalFilepath);
+
+      // Limpar arquivos temporários
+      this.cleanupTempFiles([tempVideoPath, tempAudioPath]);
+
+      const successBox = boxen(
+        chalk.green.bold(`🎉 SUCESSO!\n`) +
+          chalk.white(`📄 Arquivo: ${finalFilename}\n`) +
+          chalk.cyan(`📁 Local: ${downloadPath}\n`) +
+          chalk.yellow(`🎬 Qualidade: ${videoFormat.qualityLabel} + Áudio`),
+        {
+          title: chalk.green.bold("✅ COMBINAÇÃO COMPLETA"),
+          titleAlignment: "center",
+          padding: 1,
+          margin: 1,
+          borderStyle: "double",
+          borderColor: "green",
+        }
+      );
+
+      console.log(successBox);
+    } catch (error) {
+      // Limpar arquivos em caso de erro
+      this.cleanupTempFiles([tempVideoPath, tempAudioPath, finalFilepath]);
+      throw error;
+    }
+  }
+
+  private downloadFile(
+    url: string,
+    itag: number,
+    filepath: string,
+    label: string
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const stream = ytdl(url, { quality: itag });
+      const writeStream = createWriteStream(filepath);
+
+      const spinner = ora({
+        text: chalk.blue(label),
+        spinner: "dots12",
+      }).start();
+
+      stream.on("progress", (chunkLength: any, downloaded: any, total: any) => {
+        const percent = ((downloaded / total) * 100).toFixed(1);
+        const downloadedMB = (downloaded / 1024 / 1024).toFixed(1);
+        const totalMB = (total / 1024 / 1024).toFixed(1);
+
+        spinner.text = chalk.blue(
+          `${label}... ${percent}% (${downloadedMB}MB / ${totalMB}MB)`
+        );
+      });
+
+      stream.on("error", (error: any) => {
+        spinner.fail(chalk.red(`❌ Erro no ${label.toLowerCase()}`));
+        reject(error);
+      });
+
+      writeStream.on("error", (error) => {
+        spinner.fail(chalk.red(`❌ Erro ao salvar ${label.toLowerCase()}`));
+        reject(error);
+      });
+
+      writeStream.on("finish", () => {
+        spinner.succeed(chalk.green(`✅ ${label} concluído`));
+        resolve();
+      });
+
+      stream.pipe(writeStream);
+    });
+  }
+
+  private mergeVideoAudio(
+    videoPath: string,
+    audioPath: string,
+    outputPath: string
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const spinner = ora({
+        text: chalk.yellow("🔧 Combinando vídeo e áudio..."),
+        spinner: "dots12",
+      }).start();
+
+      ffmpeg()
+        .input(videoPath)
+        .input(audioPath)
+        .outputOptions([
+          "-c:v copy", // Copiar vídeo sem recodificar
+          "-c:a aac", // Codificar áudio para AAC
+          "-strict experimental",
+        ])
+        .output(outputPath)
+        .on("progress", (progress) => {
+          if (progress.percent) {
+            spinner.text = chalk.yellow(
+              `🔧 Combinando... ${progress.percent.toFixed(1)}%`
+            );
+          }
+        })
+        .on("end", () => {
+          spinner.succeed(chalk.green("✅ Combinação concluída"));
+          resolve();
+        })
+        .on("error", (error) => {
+          spinner.fail(chalk.red("❌ Erro na combinação"));
+          reject(error);
+        })
+        .run();
+    });
+  }
+
+  private cleanupTempFiles(filePaths: string[]): void {
+    filePaths.forEach((filePath) => {
+      try {
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          this.debugLog(`🗑️ Arquivo temporário removido: ${filePath}`);
+        }
+      } catch (error) {
+        this.debugLog(
+          `⚠️ Erro ao remover arquivo temporário: ${filePath}`,
+          error
+        );
+      }
     });
   }
 
